@@ -1,6 +1,19 @@
 EPaxos
 ======
 
+- Installation dependency issues:
+  - because this uses old non-module implementations, dependency packages has to be installed manually.
+- Run below in cwd to fix `semaphore package not found` error:
+```bash
+export GOPATH=$(pwd)
+mkdir -p src/golang.org/x/sync
+git clone https://github.com/golang/sync.git src/golang.org/x/sync
+```
+
+### TODO
+- what are the outputs latency.txt, lattput.txt?
+
+
 This repo contains code used to evaluate the Egalitarian Paxos consensus
 protocol for the NSDI '21 paper [EPaxos Revisited](https://www.usenix.org/conference/nsdi21/presentation/tollman).
 This is a fork of the code used for the original EPaxos evaluation for

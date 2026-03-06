@@ -8,3 +8,11 @@ src/golang.org
 src/github.com
 src/google.golang.org
 __pycache__
+
+stable-store-*
+logs
+*.log
+*.pid
+
+latency.txt
+lattput.txt
