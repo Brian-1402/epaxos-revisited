@@ -29,6 +29,12 @@ type ProposeReply struct {
 	CommandId int32
 	Value     state.Value
 	Timestamp int64
+	// --- NEW FIELDS
+	Seq      int32    // Global Sequence Number
+	Deps     [5]int32 // Dependencies (Fixed size array matches EPaxos DS)
+	Replica  int32    // The "Coordinator" (Host ID)
+	Instance int32    // The Instance Number on that Host
+	BatchIdx int32    // The index of the command within the batch (if batching is used)
 }
 
 // handling stalls and failures

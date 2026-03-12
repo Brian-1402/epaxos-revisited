@@ -168,7 +168,13 @@ func (e *Exec) strongconnect(v *Instance, index *int) bool {
 							// w.lb.clientProposals[idx].Timestamp
 							// Overload timestamp with time between commit and
 							// execution
-							time.Now().Sub(w.lb.commitTime).Nanoseconds()},
+							time.Now().Sub(w.lb.commitTime).Nanoseconds(),
+							w.Seq,
+							w.Deps,
+							w.ReplicaId,
+							w.InstanceNo,
+							int32(idx),
+						},
 						w.lb.clientProposals[idx].Reply)
 				}
 			}
@@ -195,6 +201,12 @@ func (na nodeArray) Len() int {
 }
 
 func (na nodeArray) Less(i, j int) bool {
+	if na[i].Seq == na[j].Seq {
+		if na[i].ReplicaId == na[j].ReplicaId {
+			return na[i].InstanceNo < na[j].InstanceNo
+		}
+		return na[i].ReplicaId < na[j].ReplicaId
+	}
 	return na[i].Seq < na[j].Seq
 }
 

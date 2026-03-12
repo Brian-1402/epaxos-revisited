@@ -102,7 +102,7 @@ func NewReplica(id int, peerAddrList []string, thrifty bool,
 	return r
 }
 
-//append a log entry to stable storage
+// append a log entry to stable storage
 func (r *Replica) recordInstanceMetadata(inst *Instance) {
 	if !r.Durable {
 		return
@@ -114,7 +114,7 @@ func (r *Replica) recordInstanceMetadata(inst *Instance) {
 	r.StableStore.Write(b[:])
 }
 
-//write a sequence of commands to stable storage
+// write a sequence of commands to stable storage
 func (r *Replica) recordCommands(cmds []state.Command) {
 	if !r.Durable {
 		return
@@ -128,7 +128,7 @@ func (r *Replica) recordCommands(cmds []state.Command) {
 	}
 }
 
-//sync with the stable store
+// sync with the stable store
 func (r *Replica) sync() {
 	if !r.Durable {
 		return
@@ -381,7 +381,8 @@ func (r *Replica) bcastCommit(instance int32, ballot int32, command []state.Comm
 
 func (r *Replica) handlePropose(propose *genericsmr.Propose) {
 	if !r.IsLeader {
-		preply := &genericsmrproto.ProposeReply{FALSE, -1, state.NIL, 0}
+		preply := &genericsmrproto.ProposeReply{FALSE, -1, state.NIL, 0,
+			-1, [5]int32{-1, -1, -1, -1, -1}, -1, -1, -1}
 		r.ReplyPropose(preply, propose.Reply)
 		return
 	}
@@ -632,7 +633,8 @@ func (r *Replica) handleAcceptReply(areply *paxosproto.AcceptReply) {
 						TRUE,
 						inst.lb.clientProposals[i].CommandId,
 						state.NIL,
-						inst.lb.clientProposals[i].Timestamp}
+						inst.lb.clientProposals[i].Timestamp,
+						-1, [5]int32{-1, -1, -1, -1, -1}, -1, -1, -1}
 					r.ReplyPropose(propreply, inst.lb.clientProposals[i].Reply)
 				}
 			}
@@ -671,7 +673,8 @@ func (r *Replica) executeCommands() {
 							TRUE,
 							inst.lb.clientProposals[j].CommandId,
 							val,
-							inst.lb.clientProposals[j].Timestamp}
+							inst.lb.clientProposals[j].Timestamp,
+							-1, [5]int32{-1, -1, -1, -1, -1}, -1, -1, -1}
 						r.ReplyPropose(propreply, inst.lb.clientProposals[j].Reply)
 					}
 				}

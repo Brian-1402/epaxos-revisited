@@ -104,6 +104,8 @@ type Instance struct {
 	Deps           [DS]int32
 	lb             *LeaderBookkeeping
 	Index, Lowlink int
+	InstanceNo     int32 // Added to track consensus slot
+	ReplicaId      int32 // Replica that owns this instance (for deterministic sort tie-breaking)
 }
 
 type instanceId struct {
@@ -989,6 +991,8 @@ func (r *Replica) startPhase1(replica int32, instance int32, ballot int32, propo
 			seq,
 			deps,
 			NewLeaderBookkeeping(proposals, deps), 0, 0,
+			instance,
+			r.Id,
 		}
 
 		r.updateConflicts(cmds, r.Id, instance, seq)
@@ -1031,6 +1035,8 @@ func (r *Replica) startPhase1(replica int32, instance int32, ballot int32, propo
 				false, nil, 0, time.Time{}},
 			0,
 			0,
+			instance,
+			r.Id,
 		}
 
 		r.latestCPReplica = r.Id
@@ -1120,6 +1126,8 @@ func (r *Replica) handlePreAccept(preAccept *epaxosproto.PreAccept) {
 			seq,
 			deps,
 			lb, 0, 0,
+			preAccept.Instance,
+			preAccept.Replica,
 		}
 	}
 
@@ -1226,7 +1234,13 @@ func (r *Replica) handlePreAcceptReply(pareply *epaxosproto.PreAcceptReply) {
 						state.NIL,
 						// Overload timestamp with commit timestamp
 						// inst.lb.clientProposals[i].Timestamp
-						time.Now().Sub(inst.lb.commitTime).Nanoseconds()},
+						time.Now().Sub(inst.lb.commitTime).Nanoseconds(),
+						inst.Seq,
+						inst.Deps,
+						pareply.Replica,
+						pareply.Instance,
+						int32(i),
+					},
 					inst.lb.clientProposals[i].Reply)
 			}
 		}
@@ -1274,7 +1288,13 @@ func (r *Replica) handlePreAcceptOK(pareply *epaxosproto.PreAcceptOK) {
 						TRUE,
 						inst.lb.clientProposals[i].CommandId,
 						state.NIL,
-						inst.lb.clientProposals[i].Timestamp},
+						inst.lb.clientProposals[i].Timestamp,
+						inst.Seq,
+						inst.Deps,
+						r.Id,
+						pareply.Instance,
+						int32(i),
+					},
 					inst.lb.clientProposals[i].Reply)
 			}
 		}
@@ -1330,7 +1350,10 @@ func (r *Replica) handleAccept(accept *epaxosproto.Accept) {
 			epaxosproto.ACCEPTED,
 			accept.Seq,
 			accept.Deps,
-			nil, 0, 0}
+			nil, 0, 0,
+			accept.Instance,
+			accept.LeaderId,
+		}
 
 		if accept.Count == 0 {
 			//checkpoint
@@ -1391,7 +1414,13 @@ func (r *Replica) handleAcceptReply(areply *epaxosproto.AcceptReply) {
 						TRUE,
 						inst.lb.clientProposals[i].CommandId,
 						state.NIL,
-						inst.lb.clientProposals[i].Timestamp},
+						inst.lb.clientProposals[i].Timestamp,
+						inst.Seq,
+						inst.Deps,
+						areply.Replica,
+						areply.Instance,
+						int32(i),
+					},
 					inst.lb.clientProposals[i].Reply)
 			}
 		}
@@ -1444,9 +1473,9 @@ func (r *Replica) handleCommit(commit *epaxosproto.Commit) {
 			epaxosproto.COMMITTED,
 			commit.Seq,
 			commit.Deps,
-			nil,
-			0,
-			0,
+			nil,	0, 0,
+			commit.Instance,
+			commit.Replica,
 		}
 
 		if len(commit.Command) == 0 {
@@ -1492,7 +1521,10 @@ func (r *Replica) handleCommitShort(commit *epaxosproto.CommitShort) {
 			epaxosproto.COMMITTED,
 			commit.Seq,
 			commit.Deps,
-			nil, 0, 0}
+			nil, 0, 0,
+			commit.Instance,
+			commit.Replica,
+		}
 
 		if commit.Count == 0 {
 			//checkpoint
@@ -1519,7 +1551,7 @@ func (r *Replica) startRecoveryForInstance(replica int32, instance int32) {
 	var nildeps [DS]int32
 
 	if r.InstanceSpace[replica][instance] == nil {
-		r.InstanceSpace[replica][instance] = &Instance{nil, 0, epaxosproto.NONE, 0, nildeps, nil, 0, 0}
+		r.InstanceSpace[replica][instance] = &Instance{nil, 0, epaxosproto.NONE, 0, nildeps, nil, 0, 0, instance, replica}
 	}
 
 	inst := r.InstanceSpace[replica][instance]
@@ -1557,7 +1589,10 @@ func (r *Replica) handlePrepare(prepare *epaxosproto.Prepare) {
 			epaxosproto.NONE,
 			0,
 			nildeps,
-			nil, 0, 0}
+			nil, 0, 0,
+			prepare.Instance,
+			prepare.Replica,
+		}
 		preply = &epaxosproto.PrepareReply{
 			r.Id,
 			prepare.Replica,
@@ -1616,7 +1651,10 @@ func (r *Replica) handlePrepareReply(preply *epaxosproto.PrepareReply) {
 			epaxosproto.COMMITTED,
 			preply.Seq,
 			preply.Deps,
-			nil, 0, 0}
+			nil, 0, 0,
+			preply.Instance,
+			preply.Replica,
+		}
 		r.bcastCommit(preply.Replica, preply.Instance, inst.Cmds, preply.Seq, preply.Deps)
 		//TODO: check if we should send notifications to clients
 		return
@@ -1712,7 +1750,10 @@ func (r *Replica) handlePrepareReply(preply *epaxosproto.PrepareReply) {
 			epaxosproto.ACCEPTED,
 			0,
 			noop_deps,
-			inst.lb, 0, 0}
+			inst.lb, 0, 0,
+			preply.Instance,
+			preply.Replica,
+		}
 		r.bcastAccept(preply.Replica, preply.Instance, inst.ballot, 0, 0, noop_deps)
 	}
 }
@@ -1761,6 +1802,8 @@ func (r *Replica) handleTryPreAccept(tpa *epaxosproto.TryPreAccept) {
 				tpa.Seq,
 				tpa.Deps,
 				nil, 0, 0,
+				tpa.Instance,
+				tpa.Replica,
 			}
 		}
 		r.replyTryPreAccept(tpa.LeaderId, &epaxosproto.TryPreAcceptReply{r.Id, tpa.Replica, tpa.Instance, TRUE, inst.ballot, 0, 0, 0})

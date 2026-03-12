@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"genericsmrproto"
 	"golang.org/x/sync/semaphore"
+	"io"
 	"log"
 	"masterproto"
 	"math/rand"
@@ -48,15 +49,27 @@ type outstandingRequestInfo struct {
 	sync.Mutex
 	sema       *semaphore.Weighted // Controls number of outstanding operations
 	startTimes map[int32]time.Time // The time at which operations were sent out
+	isWrite    map[int32]bool
 }
 
 // An outstandingRequestInfo per client thread
 var orInfos []*outstandingRequestInfo
 
+var clientLog *log.Logger
+
 func main() {
 	flag.Parse()
 
 	runtime.GOMAXPROCS(*procs)
+
+	logFile, err := os.Create("client.log")
+	if err != nil {
+		log.Println("Error creating client.log", err)
+		clientLog = log.New(os.Stdout, "", 0)
+	} else {
+		// client.log is kept open for the lifetime of the program
+		clientLog = log.New(io.MultiWriter(os.Stdout, logFile), "", 0)
+	}
 
 	if *conflicts > 100 {
 		log.Fatalf("Conflicts percentage must be between 0 and 100.\n")
@@ -65,7 +78,6 @@ func main() {
 	orInfos = make([]*outstandingRequestInfo, *T)
 
 	var master *rpc.Client
-	var err error
 	for {
 		master, err = rpc.DialHTTP("tcp", fmt.Sprintf("%s:%d", *masterAddr, *masterPort))
 		if err != nil {
@@ -109,10 +121,11 @@ func main() {
 			sync.Mutex{},
 			semaphore.NewWeighted(*outstandingReqs),
 			make(map[int32]time.Time, *outstandingReqs),
+			make(map[int32]bool, *outstandingReqs),
 		}
 
-		go simulatedClientWriter(writer, orInfo)
-		go simulatedClientReader(reader, orInfo, readings)
+		go simulatedClientWriter(writer, orInfo, i)
+		go simulatedClientReader(reader, orInfo, readings, i)
 
 		orInfos[i] = orInfo
 	}
@@ -120,7 +133,7 @@ func main() {
 	printer(readings)
 }
 
-func simulatedClientWriter(writer *bufio.Writer, orInfo *outstandingRequestInfo) {
+func simulatedClientWriter(writer *bufio.Writer, orInfo *outstandingRequestInfo, clientId int) {
 	args := genericsmrproto.Propose{0 /* id */, state.Command{state.PUT, 0, 0}, 0 /* timestamp */}
 
 	conflictRand := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -152,6 +165,7 @@ func simulatedClientWriter(writer *bufio.Writer, orInfo *outstandingRequestInfo)
 			} else {
 				args.Command.Op = state.PUT_BLIND
 			}
+			args.Command.V = state.Value(id)
 		} else {
 			args.Command.Op = state.GET // read operation
 		}
@@ -174,17 +188,23 @@ func simulatedClientWriter(writer *bufio.Writer, orInfo *outstandingRequestInfo)
 		}
 
 		before := time.Now()
+		if args.Command.Op == state.GET {
+			clientLog.Printf("CALL Read client=%d id=%d key=%d\n", clientId, args.CommandId, args.Command.K)
+		} else {
+			clientLog.Printf("CALL Write client=%d id=%d key=%d value=%d\n", clientId, args.CommandId, args.Command.K, args.Command.V)
+		}
 		writer.WriteByte(genericsmrproto.PROPOSE)
 		args.Marshal(writer)
 		writer.Flush()
 
 		orInfo.Lock()
 		orInfo.startTimes[id] = before
+		orInfo.isWrite[id] = (args.Command.Op != state.GET)
 		orInfo.Unlock()
 	}
 }
 
-func simulatedClientReader(reader *bufio.Reader, orInfo *outstandingRequestInfo, readings chan *response) {
+func simulatedClientReader(reader *bufio.Reader, orInfo *outstandingRequestInfo, readings chan *response, clientId int) {
 	var reply genericsmrproto.ProposeReply
 
 	for {
@@ -199,7 +219,39 @@ func simulatedClientReader(reader *bufio.Reader, orInfo *outstandingRequestInfo,
 		orInfo.Lock()
 		before := orInfo.startTimes[reply.CommandId]
 		delete(orInfo.startTimes, reply.CommandId)
+		isWrite := orInfo.isWrite[reply.CommandId]
+		delete(orInfo.isWrite, reply.CommandId)
 		orInfo.Unlock()
+
+		hosts := make([]int, len(reply.Deps))
+		for i := range reply.Deps {
+			hosts[i] = i
+		}
+
+		if isWrite {
+			clientLog.Printf("RET client=%d id=%d seq=%d coord=%d i=%d batchidx=%d deps=%v hosts=%v\n",
+				clientId,
+				reply.CommandId,
+				reply.Seq,
+				reply.Replica,
+				reply.Instance,
+				reply.BatchIdx,
+				reply.Deps,
+				hosts,
+			)
+		} else {
+			clientLog.Printf("RET client=%d id=%d value=%d seq=%d coord=%d i=%d batchidx=%d deps=%v hosts=%v\n",
+				clientId,
+				reply.CommandId,
+				reply.Value,
+				reply.Seq,
+				reply.Replica,
+				reply.Instance,
+				reply.BatchIdx,
+				reply.Deps,
+				hosts,
+			)
+		}
 
 		rtt := (after.Sub(before)).Seconds() * 1000
 		commitToExec := float64(reply.Timestamp) / 1e6
